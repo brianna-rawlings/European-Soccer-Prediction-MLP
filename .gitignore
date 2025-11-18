@@ -1,0 +1,26 @@
+# .gitignore
+
+# Trained Model Files
+*.pkl
+*.joblib
+*.h5
+
+# Database File
+database.sqlite
+
+# Environment/Cache
+__pycache__/
+venv/
+.env
+
+# Streamlit Cache
+.streamlit/
+
+# .gitignore
+
+# Large Database File
+database.sqlite
+
+# Other non-code files
+*.pkl
+*.joblib
