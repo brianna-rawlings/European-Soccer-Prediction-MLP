@@ -3,100 +3,155 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+from io import BytesIO
 
-# --- Page Config ---
 st.set_page_config(page_title="Soccer Match Predictor", layout="wide")
-st.title("⚽ European Soccer Match Predictor")
-st.write("---")
 
-# --- Load Models & Metrics ---
+# --- Model & Metric Loading ---
 @st.cache_resource
-def load_models():
-    logreg_model = joblib.load('logreg_model.pkl')
-    mlp_model = joblib.load('mlp_model.pkl')
-    ga_model = joblib.load('ga_model.pkl')          
-    scaler = joblib.load('scaler.pkl')
+def load_assets():
+    """Loads all models, metrics, and scaler."""
+    try:
+        models = {
+            'Logistic Regression (Baseline)': joblib.load('logreg_model.pkl'),
+            'MLP (Tuned)': joblib.load('mlp_model.pkl'),
+            'GA-Optimized LR': joblib.load('ga_model.pkl')
+        }
+        metrics = {
+            'Logistic Regression (Baseline)': joblib.load('logreg_metrics.pkl'),
+            'MLP (Tuned)': joblib.load('mlp_metrics.pkl'),
+            'GA-Optimized LR': joblib.load('ga_metrics.pkl')
+        }
+        scaler = joblib.load('scaler.pkl')
+        return models, metrics, scaler
+    except FileNotFoundError:
+        st.error("Assets not found. Please run 'python model.py' first to train and save all models and metrics.")
+        st.stop()
 
-    logreg_metrics = joblib.load('logreg_metrics.pkl')
-    mlp_metrics = joblib.load('mlp_metrics.pkl')
-    ga_metrics = joblib.load('ga_metrics.pkl')      
+models, metrics, scaler = load_assets()
+FEATURES = ['home_advantage', 'rating_difference', 'form_difference', 'h2h_home_win_rate', 'recent_goal_diff']
 
-    return logreg_model, mlp_model, ga_model, scaler, logreg_metrics, mlp_metrics, ga_metrics
+# --- ROC Curve Plotting Function ---
+def plot_roc_curves(metrics):
+    """Generates a comparison plot of ROC curves for all models."""
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    for model_name, metric_data in metrics.items():
+        if metric_data['roc']:
+            # Plot the average AUC (or class 2 for simplicity)
+            avg_auc = np.mean([d['auc'] for d in metric_data['roc']])
+            
+            # Use the ROC data for Home Win (Class 2) for plotting, or the highest AUC class
+            home_win_roc = [d for d in metric_data['roc'] if d['class'] == 2]
+            if home_win_roc:
+                ax.plot(home_win_roc[0]['fpr'], home_win_roc[0]['tpr'], 
+                        label=f'{model_name} (AUC: {avg_auc:.3f})', 
+                        lw=2)
 
-#  Load everything in one step
-models_and_metrics = load_models()
-logreg_model, mlp_model, ga_model, scaler, logreg_metrics, mlp_metrics, ga_metrics = models_and_metrics
+    ax.plot([0, 1], [0, 1], color='gray', linestyle='--', label='Random Guess (AUC: 0.50)')
+    ax.set_xlim([0.0, 1.0])
+    ax.set_ylim([0.0, 1.05])
+    ax.set_xlabel('False Positive Rate (FPR)')
+    ax.set_ylabel('True Positive Rate (TPR)')
+    ax.set_title('Model ROC Curve Comparison (vs Home Win Class)')
+    ax.legend(loc="lower right")
+    st.pyplot(fig)
 
-# --- Model Selection ---
-selected_model_name = st.selectbox(
-    'Select Machine Learning Paradigm:',
-    ['Logistic Regression', 'Multilayer Perceptron (MLP)', 'GA']
-)
 
-if selected_model_name == 'Logistic Regression':
-    model = models_and_metrics[0]   # logreg_model
-    metrics = models_and_metrics[4] # logreg_metrics
-elif selected_model_name == 'Multilayer Perceptron (MLP)':
-    model = models_and_metrics[1]   # mlp_model
-    metrics = models_and_metrics[5] # mlp_metrics
-else:
-    model = models_and_metrics[2]   # ga_model
-    metrics = models_and_metrics[6] # ga_metrics
-
-st.info(f"Using {selected_model_name}")
+# --- UI Implementation ---
+st.title("European Soccer Match Predictor")
+st.markdown("### Comparing 3 Tuned Machine Learning Paradigms")
 
 # --- Sidebar Inputs ---
-st.sidebar.header("Match Feature Inputs")
-home_advantage = 1
+st.sidebar.header("Match Feature Inputs (5 Core Features)")
+
+# Feature 1: Home Advantage (Constant)
+home_advantage = 1 
+st.sidebar.markdown(f"**Home Advantage:** Fixed at {home_advantage}")
+
+# Feature 2: Static Rating Difference
+st.sidebar.write("### 1. Static Rating Difference")
 rating_difference = st.sidebar.slider(
-    "Rating Difference (Home - Away)", -20.0, 20.0, 0.0, 0.5, key="rating_diff"
+    'Rating Difference (Home - Away Avg Quality)',
+    min_value=-20.0, max_value=20.0, value=0.0, step=0.5
 )
+
+# Feature 3: Recent Form Difference
+st.sidebar.write("### 2. Recent Form Difference")
 form_difference = st.sidebar.slider(
-    "Recent Form Difference (Home - Away)", -15.0, 15.0, 0.0, 1.0, key="form_diff"
+    'Form Difference (Home - Away Last 5 Matches)',
+    min_value=-15.0, max_value=15.0, value=0.0, step=1.0 
 )
 
-# --- Prediction ---
-if st.button("Predict Match Outcome"):
-    st.subheader("Prediction Results")
+# Feature 4: H2H Win Rate (User controls the rate based on historical data)
+st.sidebar.write("### 3. H2H Win Rate")
+h2h_win_rate = st.sidebar.slider(
+    'H2H Win Rate (Home Team Historical Win Rate vs Opponent)',
+    min_value=0.0, max_value=1.0, value=0.5, step=0.05
+)
 
-    # Prepare input
-    new_match_data = pd.DataFrame([[home_advantage, rating_difference, form_difference]],
-                                  columns=['home_advantage', 'rating_difference', 'form_difference'])
-    X_new_scaled = scaler.transform(new_match_data)
+# Feature 5: Recent Goal Difference
+st.sidebar.write("### 4. Recent Goal Difference")
+recent_goal_diff = st.sidebar.slider(
+    'Recent Goal Diff (Home Team Recent Goals For - Against)',
+    min_value=-2.0, max_value=2.0, value=0.0, step=0.1
+)
 
-    # Predict
+# --- Comparison Section ---
+st.header("1. Model Performance Comparison")
+
+# Create comparison table
+comparison_data = {}
+for name, metric_data in metrics.items():
+    avg_auc = np.mean([d['auc'] for d in metric_data['roc']]) if metric_data['roc'] else 0.0
+    comparison_data[name] = {
+        'Accuracy': f"{metric_data['acc']:.4f}",
+        'F1 Score (Weighted)': f"{metric_data['f1']:.4f}",
+        'AUC Score (Average)': f"{avg_auc:.4f}",
+    }
+
+comparison_df = pd.DataFrame.from_dict(comparison_data, orient='index')
+st.dataframe(comparison_df)
+
+st.header("2. Prediction for Hypotheical Match")
+
+# 4. Prediction Logic
+selected_model_name = st.selectbox(
+    '**Select Machine Learning Paradigm to Test**', 
+    list(models.keys())
+)
+
+if st.button('Predict Match Outcome'):
+    model = models[selected_model_name]
+    
+    # Prepare the input data structure with ALL 5 features
+    input_data = pd.DataFrame(
+        [[home_advantage, rating_difference, form_difference, h2h_win_rate, recent_goal_diff]], 
+        columns=FEATURES 
+    )
+
+    # Scale the input
+    X_new_scaled = scaler.transform(input_data)
+    
+    # Model Prediction
     probabilities = model.predict_proba(X_new_scaled)[0]
     predicted_class = model.predict(X_new_scaled)[0]
+    
     outcome_map = {2: 'HOME WIN', 1: 'DRAW', 0: 'AWAY WIN'}
-    st.markdown(f"**Predicted Outcome:** <span style='color:green; font-size: 24px;'>{outcome_map[predicted_class]}</span>", unsafe_allow_html=True)
+    
+    st.subheader(f"Prediction using: {selected_model_name}")
+    final_prediction = outcome_map[predicted_class]
+    st.markdown(f"**Most Likely Outcome:** <span style='color:green; font-size: 24px;'>{final_prediction}</span>", unsafe_allow_html=True)
 
-    # Probability Bar Chart
-    prob_df = pd.DataFrame({'Outcome': ['AWAY WIN', 'DRAW', 'HOME WIN'], 'Probability': probabilities}).set_index('Outcome')
-    st.bar_chart(prob_df)
+    # Display probabilities
+    prob_df = pd.DataFrame({
+        'Outcome': ['AWAY WIN', 'DRAW', 'HOME WIN'],
+        'Probability': probabilities
+    }, index=['AWAY WIN', 'DRAW', 'HOME WIN'])
+    
+    st.bar_chart(prob_df['Probability'], height=300)
 
-    st.markdown("---")
 
-    # Metrics Display in Columns
-    col1, col2 = st.columns(2)
-    col1.metric(label="Test Accuracy", value=f"{metrics['acc']:.4f}")
-    col2.metric(label="Test F1 Score (Weighted)", value=f"{metrics['f1']:.4f}")
-
-    # Interactive ROC Curve with Plotly
-    roc_data = metrics.get('roc', [])
-    if roc_data:
-        fig = go.Figure()
-        class_names = ['AWAY WIN', 'DRAW', 'HOME WIN']
-        for cls, fpr, tpr, roc_auc in roc_data:
-            fig.add_trace(go.Scatter(x=fpr, y=tpr, mode='lines', name=f"{class_names[cls]} (AUC={roc_auc:.2f})"))
-        fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', line=dict(dash='dash'), showlegend=False))
-        fig.update_layout(
-            title=f"ROC Curve — {selected_model_name}",
-            xaxis_title="False Positive Rate",
-            yaxis_title="True Positive Rate",
-            width=700, height=500,
-            legend=dict(x=0.7, y=0.2)
-        )
-        st.plotly_chart(fig)
-    else:
-        st.warning(f"{selected_model_name} does not support probability predictions for ROC.")
+st.header("3. ROC Curve Analysis")
+plot_roc_curves(metrics)
