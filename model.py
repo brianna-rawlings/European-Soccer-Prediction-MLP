@@ -1,144 +1,173 @@
 # model.py
 import pandas as pd
-from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import accuracy_score, f1_score, roc_curve, auc
 import joblib
-import random
 from data_prep import load_data_and_create_features
+import random
 import numpy as np
-import warnings
-warnings.filterwarnings("ignore") # Ignore FutureWarnings for cleaner output
 
-# Features to use (The 5 Core Features)
-FEATURES = ['home_advantage', 'rating_difference', 'form_difference', 
-            'h2h_home_win_rate', 'recent_goal_diff']
+
+# Features to use
+FEATURES = [
+    'home_advantage',
+    'rating_difference',
+    'form_difference',
+    'h2h_home_win_rate',
+    'recent_goal_diff'
+]
+
+# --- Helper Functions ---
+def train_model(model, X_train, y_train):
+    """Train a given model."""
+    model.fit(X_train, y_train)
+    return model
 
 def evaluate_model(model, X_test, y_test):
-    """Compute accuracy, F1, and ROC data."""
+    """Compute accuracy, F1, and ROC data (as dictionaries)."""
     y_pred = model.predict(X_test)
     acc = accuracy_score(y_test, y_pred)
-    f1 = f1_score(y_test, y_pred, average='weighted', zero_division=0)
+    f1 = f1_score(y_test, y_pred, average='weighted')
     
-    roc_data = []
+    roc_data = None
     if hasattr(model, "predict_proba"):
         y_proba = model.predict_proba(X_test)
-        # Calculate ROC for each class (Win, Draw, Loss)
+        roc_data = []
         for i in range(y_proba.shape[1]):
             fpr, tpr, _ = roc_curve(y_test, y_proba[:, i], pos_label=i)
             roc_auc = auc(fpr, tpr)
-            roc_data.append({'class': i, 'fpr': fpr, 'tpr': tpr, 'auc': roc_auc})
-            
+            roc_data.append({
+                'class': i,
+                'fpr': fpr,
+                'tpr': tpr,
+                'auc': roc_auc
+            })
     return acc, f1, roc_data
 
+# --- Genetic Algorithm for Logistic Regression ---
+def train_ga_model(X_train, y_train, X_test, y_test,
+                   population_size=20, generations=10, mutation_rate=0.2):
+    """Genetic Algorithm to optimize Logistic Regression hyperparameters (C, max_iter)."""
+    print("--- Starting True GA ---")
+    
+    # Initialize population: [C, max_iter]
+    population = [[10 ** random.uniform(-3, 3), random.randint(200, 2000)]
+                  for _ in range(population_size)]
 
-def tune_and_train_mlp(X_train, y_train, X_test, y_test, scaler):
-    """Tunes MLP using RandomizedSearchCV and trains the final model."""
-    print("--- Starting MLP Tuning (Randomized Search) ---")
-    
-    param_grid = {
-        'hidden_layer_sizes': [(50,), (100,), (5, 5), (10, 10), (50, 50)],
-        'alpha': [0.0001, 0.001, 0.01, 0.1], 
-    }
-    
-    base_mlp = MLPClassifier(activation='relu', solver='adam', max_iter=500, random_state=42)
-    
-    # Use RandomizedSearchCV for tuning
-    rs_mlp = RandomizedSearchCV(
-        estimator=base_mlp, 
-        param_distributions=param_grid, 
-        n_iter=10, # Number of parameter settings that are sampled
-        scoring='f1_weighted', 
-        cv=3, 
-        random_state=42, 
-        n_jobs=-1
-    )
-    rs_mlp.fit(X_train, y_train)
-    
-    tuned_mlp = rs_mlp.best_estimator_
-    joblib.dump(tuned_mlp, 'mlp_model.pkl')
-    
-    acc, f1, roc = evaluate_model(tuned_mlp, X_test, y_test)
-    joblib.dump({'acc': acc, 'f1': f1, 'roc': roc}, 'mlp_metrics.pkl')
-    print(f"MLP (Tuned) saved. Best params: {rs_mlp.best_params_}")
-    print(f"MLP Accuracy: {acc:.4f}, F1 Score: {f1:.4f}")
-    return tuned_mlp
-
-
-def train_ga_model(X_train, y_train, X_test, y_test):
-    """Simulates a GA optimization (Random Search) for the LR model's C parameter."""
-    print("--- Starting GA Optimization Simulation (Random Search) ---")
-    
-    best_acc = 0
-    best_params = {}
-
-    # Simulate GA population size
-    for _ in range(20):
-        C_candidate = random.uniform(0.1, 10)
-        max_iter_candidate = random.randint(500, 2000)
-        
+    def fitness(individual):
+        C, max_iter = individual
         model = LogisticRegression(
-            multi_class='multinomial', solver='lbfgs',
-            C=C_candidate, max_iter=max_iter_candidate, random_state=42
+            multi_class='multinomial',
+            solver='lbfgs',
+            C=C,
+            max_iter=max_iter,
+            random_state=42
         )
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
-        acc = accuracy_score(y_test, y_pred)
+        return accuracy_score(y_test, y_pred)
+
+    for gen in range(generations):
+        fitness_scores = [fitness(ind) for ind in population]
+        best_idx = np.argmax(fitness_scores)
+        print(f"Gen {gen+1} best acc: {fitness_scores[best_idx]:.4f}, "
+              f"C={population[best_idx][0]:.3f}, max_iter={population[best_idx][1]}")
         
-        if acc > best_acc:
-            best_acc = acc
-            best_params = {'C': C_candidate, 'max_iter': max_iter_candidate}
+        # Selection + Crossover + Mutation
+        new_population = []
+        while len(new_population) < population_size:
+            i1, i2 = random.sample(range(population_size), 2)
+            parent = population[i1] if fitness_scores[i1] > fitness_scores[i2] else population[i2]
 
-    # Train final GA-LR model with best parameters
-    ga_model = LogisticRegression(multi_class='multinomial', solver='lbfgs', random_state=42, **best_params)
+            i3 = random.randint(0, population_size-1)
+            other_parent = population[i3]
+            child = [
+                (parent[0] + other_parent[0]) / 2,
+                int((parent[1] + other_parent[1]) / 2)
+            ]
+
+            if random.random() < mutation_rate:
+                child[0] *= 10 ** random.uniform(-0.2, 0.2)
+                child[1] += random.randint(-100, 100)
+                child[1] = max(100, min(child[1], 3000))
+            
+            new_population.append(child)
+        population = new_population
+
+    # Train final GA model with best individual
+    fitness_scores = [fitness(ind) for ind in population]
+    best_idx = np.argmax(fitness_scores)
+    best_C, best_iter = population[best_idx]
+    ga_model = LogisticRegression(
+        multi_class='multinomial',
+        solver='lbfgs',
+        C=best_C,
+        max_iter=best_iter,
+        random_state=42
+    )
     ga_model.fit(X_train, y_train)
-
-    # Evaluate
     acc, f1, roc = evaluate_model(ga_model, X_test, y_test)
-    joblib.dump(ga_model, 'ga_model.pkl')
-    joblib.dump({'acc': acc, 'f1': f1, 'roc': roc}, 'ga_metrics.pkl')
-    print(f"GA (Tuned LR) saved. Best C: {best_params['C']:.2f}, Acc: {acc:.4f}, F1 Score: {f1:.4f}")
-    return ga_model
+    print(f"GA final model: C={best_C:.3f}, max_iter={best_iter}, acc={acc:.4f}")
+    return ga_model, {'acc': acc, 'f1': f1, 'roc': roc}
 
-
+# --- Full Training Pipeline ---
 def train_and_save_all():
-    """Main function to run the entire ML pipeline."""
     print("--- Starting ML Project Training Pipeline ---")
     
-    # 1. Load and prepare data
+    # Load and prepare data
     match_df = load_data_and_create_features()
     X = match_df[FEATURES]
     y = match_df['match_outcome']
-    
-    # 2. Train-test split
+
+    # Train-test split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
-    
-    # 3. Scale features
+
+    # Scale features
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     joblib.dump(scaler, 'scaler.pkl')
-    print(f"Scaler saved to 'scaler.pkl'. Total samples: {X.shape[0]}")
-    
-    # 4. Train LR (Baseline)
-    logreg = LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000, random_state=42)
-    logreg.fit(X_train_scaled, y_train)
+    print("Scaler saved to 'scaler.pkl'")
+
+    # Logistic Regression
+    logreg = LogisticRegression(
+        multi_class='multinomial',
+        solver='lbfgs',
+        max_iter=1000,
+        random_state=42
+    )
+    logreg = train_model(logreg, X_train_scaled, y_train)
     joblib.dump(logreg, 'logreg_model.pkl')
-    acc, f1, roc = evaluate_model(logreg, X_test_scaled, y_test)
-    joblib.dump({'acc': acc, 'f1': f1, 'roc': roc}, 'logreg_metrics.pkl')
-    print(f"Logistic Regression (Baseline) saved. Acc: {acc:.4f}, F1 Score: {f1:.4f}")
-    
-    # 5. Train MLP (Tuned)
-    tune_and_train_mlp(X_train_scaled, y_train, X_test_scaled, y_test, scaler)
-    
-    # 6. Train GA-LR (Optimized)
-    train_ga_model(X_train_scaled, y_train, X_test_scaled, y_test)
-    
-    print("--- Training and evaluation of all 3 paradigms complete ---")
+    acc_lr, f1_lr, roc_lr = evaluate_model(logreg, X_test_scaled, y_test)
+    joblib.dump({'acc': acc_lr, 'f1': f1_lr, 'roc': roc_lr}, 'logreg_metrics.pkl')
+    print(f"LR Accuracy: {acc_lr:.4f}, F1 Score: {f1_lr:.4f}")
+
+    # MLP
+    mlp = MLPClassifier(
+        hidden_layer_sizes=(10,10),
+        activation='relu',
+        solver='adam',
+        max_iter=500,
+        random_state=42
+    )
+    mlp = train_model(mlp, X_train_scaled, y_train)
+    joblib.dump(mlp, 'mlp_model.pkl')
+    acc_mlp, f1_mlp, roc_mlp = evaluate_model(mlp, X_test_scaled, y_test)
+    joblib.dump({'acc': acc_mlp, 'f1': f1_mlp, 'roc': roc_mlp}, 'mlp_metrics.pkl')
+    print(f"MLP Accuracy: {acc_mlp:.4f}, F1 Score: {f1_mlp:.4f}")
+
+    # GA
+    ga_model, ga_metrics = train_ga_model(X_train_scaled, y_train, X_test_scaled, y_test)
+    joblib.dump(ga_model, 'ga_model.pkl')
+    joblib.dump(ga_metrics, 'ga_metrics.pkl')
+    print(f"GA Accuracy: {ga_metrics['acc']:.4f}, F1 Score: {ga_metrics['f1']:.4f}")
+
+    print("--- Training and evaluation complete ---")
 
 if __name__ == '__main__':
     train_and_save_all()
