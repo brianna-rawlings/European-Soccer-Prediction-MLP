@@ -12,7 +12,6 @@ import numpy as np
 import warnings
 warnings.filterwarnings("ignore") # Ignore FutureWarnings for cleaner output
 
-# Features to use (The 5 Core Features)
 FEATURES = ['home_advantage', 'rating_difference', 'form_difference', 
             'h2h_home_win_rate', 'recent_goal_diff']
 

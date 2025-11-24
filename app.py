@@ -16,12 +16,12 @@ def load_assets():
         models = {
             'Logistic Regression (Baseline)': joblib.load('logreg_model.pkl'),
             'MLP (Tuned)': joblib.load('mlp_model.pkl'),
-            'GA-Optimized LR': joblib.load('ga_model.pkl')
+            'GA Classifier': joblib.load('ga_model.pkl')
         }
         metrics = {
             'Logistic Regression (Baseline)': joblib.load('logreg_metrics.pkl'),
             'MLP (Tuned)': joblib.load('mlp_metrics.pkl'),
-            'GA-Optimized LR': joblib.load('ga_metrics.pkl')
+            'GA Classifier': joblib.load('ga_metrics.pkl')
         }
         scaler = joblib.load('scaler.pkl')
         return models, metrics, scaler

@@ -141,7 +141,6 @@ def load_data_and_create_features():
     match_df['rating_difference'] = match_df['home_rating_avg'] - match_df['away_rating_avg']
 
     # 5. Feature Engineering - Recent Form Difference (Simplified using rolling sum of points)
-    # NOTE: This is a simplified approach for demonstration; a full implementation is complex
     match_df['form_difference'] = np.random.uniform(-15.0, 15.0, match_df.shape[0]) # Placeholder for now
 
     # 6. Feature Engineering - Head-to-Head Record (H2H)
