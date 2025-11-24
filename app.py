@@ -30,32 +30,73 @@ def load_assets():
         st.stop()
 
 models, metrics, scaler = load_assets()
-FEATURES = ['home_advantage', 'rating_difference', 'form_difference', 'h2h_home_win_rate', 'recent_goal_diff']
+# Features to use
+FEATURES = [
+    'home_advantage',
+    'rating_difference',
+    'form_difference',
+    'h2h_home_win_rate',
+    'recent_goal_diff'
+]
 
 # --- ROC Curve Plotting Function ---
 def plot_roc_curves(metrics):
-    """Generates a comparison plot of ROC curves for all models."""
-    fig, ax = plt.subplots(figsize=(8, 6))
-    
-    for model_name, metric_data in metrics.items():
-        if metric_data['roc']:
-            # Plot the average AUC (or class 2 for simplicity)
-            avg_auc = np.mean([d['auc'] for d in metric_data['roc']])
-            
-            # Use the ROC data for Home Win (Class 2) for plotting, or the highest AUC class
-            home_win_roc = [d for d in metric_data['roc'] if d['class'] == 2]
-            if home_win_roc:
-                ax.plot(home_win_roc[0]['fpr'], home_win_roc[0]['tpr'], 
-                        label=f'{model_name} (AUC: {avg_auc:.3f})', 
-                        lw=2)
+    """
+    Plot ROC curves interactively based on user selections.
+    """
 
-    ax.plot([0, 1], [0, 1], color='gray', linestyle='--', label='Random Guess (AUC: 0.50)')
+    # Streamlit multiselect for models and classes
+    selected_models = st.multiselect(
+        "Select models to display", list(metrics.keys()), default=list(metrics.keys())
+    )
+    class_names = {0: 'AWAY WIN', 1: 'DRAW', 2: 'HOME WIN'}
+    selected_classes = st.multiselect(
+        "Select classes to display", list(class_names.values()), default=list(class_names.values())
+    )
+
+    if not selected_models or not selected_classes:
+        st.warning("Please select at least one model and one class to plot ROC curves.")
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    base_colors = ['darkorange', 'green', 'blue', 'red', 'purple', 'cyan']
+
+    for idx, model_name in enumerate(selected_models):
+        metric_data = metrics[model_name]
+        if metric_data['roc']:
+            for class_info in metric_data['roc']:
+                cls = class_info['class']
+                if class_names[cls] not in selected_classes:
+                    continue
+                fpr = class_info['fpr']
+                tpr = class_info['tpr']
+                auc_score = class_info['auc']
+                color = base_colors[(idx + cls) % len(base_colors)]
+
+                ax.plot(
+                    fpr, tpr,
+                    label=f"{model_name} - {class_names[cls]} (AUC: {auc_score:.2f})",
+                    color=color,
+                    lw=3,
+                    alpha=0.85
+                )
+                ax.fill_between(fpr, 0, tpr, color=color, alpha=0.1)
+
+    # Random guess diagonal
+    ax.plot([0, 1], [0, 1], color='gray', linestyle='--', lw=2, label='Random Guess (AUC=0.50)')
+
+    # Axes and title
     ax.set_xlim([0.0, 1.0])
     ax.set_ylim([0.0, 1.05])
-    ax.set_xlabel('False Positive Rate (FPR)')
-    ax.set_ylabel('True Positive Rate (TPR)')
-    ax.set_title('Model ROC Curve Comparison (vs Home Win Class)')
-    ax.legend(loc="lower right")
+    ax.set_xlabel('False Positive Rate (FPR)', fontsize=14)
+    ax.set_ylabel('True Positive Rate (TPR)', fontsize=14)
+    ax.set_title('ROC Curve Comparison (All Classes)', fontsize=16)
+    ax.grid(alpha=0.3)
+
+    # Legend outside
+    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=12)
+    plt.tight_layout()
+
     st.pyplot(fig)
 
 
