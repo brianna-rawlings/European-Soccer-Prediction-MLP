@@ -13,14 +13,20 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import accuracy_score, f1_score, roc_curve, auc
 from sklearn.model_selection import cross_val_score
 
+# Assuming data_prep is in the same directory and handles loading/feature creation
 from data_prep import load_data_and_create_features
 import numpy as np
 import warnings
 warnings.filterwarnings("ignore") # Ignore FutureWarnings for cleaner output
 
+# --- GLOBAL CONFIGURATION ---
+RANDOM_STATE = 42 # Defined to fix the original NameError and ensure reproducibility
+
 # Features to use (The 5 Core Features)
 FEATURES = ['home_advantage', 'rating_difference', 'form_difference', 
             'h2h_home_win_rate', 'recent_goal_diff']
+
+# --- UTILITY FUNCTION ---
 
 def evaluate_model(model, X_test, y_test):
     """
@@ -37,6 +43,7 @@ def evaluate_model(model, X_test, y_test):
         roc_data = []
 
         for cls in range(y_proba.shape[1]):
+            # Use 'ovr' (one-vs-rest) approach for multi-class ROC
             fpr, tpr, _ = roc_curve(y_test, y_proba[:, cls], pos_label=cls)
             roc_data.append({
                 "class": cls,
@@ -48,7 +55,7 @@ def evaluate_model(model, X_test, y_test):
     return acc, f1, roc_data
 
 
-# Genetic Algorithm 
+# --- GENETIC ALGORITHM OPTIMIZATION ---
 
 def train_ga_model(
     X_train, y_train, X_val, y_val,
@@ -150,14 +157,82 @@ def train_ga_model(
     return final_model
 
 
-# Main Training Pipeline
+# --- EXPERIMENT EXTENSION FUNCTION (Team-Specific Modeling) ---
+
+def train_and_save_team_model(df, target_teams, model_name_prefix):
+    """
+    Trains and saves models using data filtered for a specific set of teams.
+    This serves as the extension/improvement part of the project.
+    """
+    
+    # Filter the DataFrame to include only matches where one of the target teams played
+    df_filtered = df[
+        (df["home_team"].isin(target_teams)) | 
+        (df["away_team"].isin(target_teams))
+    ].copy()
+
+    # --- START OF TEAM-SPECIFIC ML PIPELINE ---
+    team_list_str = f"{target_teams[0]} vs {target_teams[1]}" if len(target_teams) == 2 else ', '.join(target_teams)
+    print(f"\n--- Running ML Pipeline Extension: {model_name_prefix} (Teams: {team_list_str}) ---")
+    
+    total_matches = len(df_filtered)
+    print(f"Total filtered matches: {total_matches}")
+    
+    if total_matches < 100:
+        print("WARNING: Dataset is small. Results are likely overfit and highly variable.")
+        
+    X = df_filtered[FEATURES]
+    y = df_filtered["match_outcome"]
+    
+    # Check class distribution for the filtered data (can be different from global)
+    print("\n--- Filtered Match Outcome Class Distribution ---")
+    print(y.value_counts(normalize=True).mul(100).round(1).astype(str) + '%')
+    print("------------------------------------------------")
+    
+    # Split (stratify is essential to maintain class balance in the small set)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
+    )
+
+    # Scale 
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    joblib.dump(scaler, f"scaler_{model_name_prefix}.pkl")
+
+
+    # --- Train Logistic Regression (Simplified Model for Comparison) ---
+    print("\n--- Training LogReg for Filtered Data ---")
+    logreg = LogisticRegression(
+        multi_class="multinomial",
+        solver="lbfgs",
+        random_state=RANDOM_STATE
+    )
+    logreg.fit(X_train_scaled, y_train)
+    acc, f1, roc = evaluate_model(logreg, X_test_scaled, y_test)
+    
+    # Print metrics for comparison in presentation
+    print(f"{model_name_prefix} LogReg Test Accuracy: {acc:.4f}, F1 Score: {f1:.4f}")
+    
+    joblib.dump(logreg, f"{model_name_prefix}_logreg_model.pkl")
+    joblib.dump({"acc": acc, "f1": f1, "roc": roc}, f"{model_name_prefix}_logreg_metrics.pkl")
+    
+    print(f"--- {model_name_prefix} Training Completed ---")
+
+
+# --- MAIN TRAINING PIPELINE (Global Model) ---
 
 def train_and_save_all():
-    print("\n--- Starting ML Training Pipeline ---")
+    print("\n--- Starting ML Training Pipeline (Global Model) ---")
 
     df = load_data_and_create_features()
     X = df[FEATURES]
     y = df["match_outcome"]
+    
+    # Check Global Class Distribution
+    print("\n--- Global Match Outcome Class Distribution ---")
+    print(y.value_counts(normalize=True).mul(100).round(1).astype(str) + '%')
+    print("---------------------------------------------")
 
     # Split
     X_train, X_test, y_train, y_test = train_test_split(
@@ -170,7 +245,7 @@ def train_and_save_all():
     X_test_scaled = scaler.transform(X_test)
     joblib.dump(scaler, "scaler.pkl")
 
-    # --- Insert here: Logistic Regression and MLP Training with Progress ---
+    # --- Training Logistic Regression (Baseline) ---
     print("\n--- Training Logistic Regression ---")
     logreg = LogisticRegression(
         multi_class="multinomial",
@@ -183,6 +258,7 @@ def train_and_save_all():
     joblib.dump(logreg, "logreg_model.pkl")
     joblib.dump({"acc": acc, "f1": f1, "roc": roc}, "logreg_metrics.pkl")
 
+    # --- Training MLP Classifier ---
     print("\n--- Training MLP Classifier ---")
     mlp = MLPClassifier(
         hidden_layer_sizes=(64, 32),
@@ -197,16 +273,32 @@ def train_and_save_all():
     joblib.dump(mlp, "mlp_model.pkl")
     joblib.dump({"acc": acc, "f1": f1, "roc": roc}, "mlp_metrics.pkl")
 
-    # --- Then continue with GA model ---
+    # --- Training GA Optimized Model ---
     ga_model = train_ga_model(
         X_train_scaled, y_train,
         X_test_scaled, y_test
     )
     acc, f1, roc = evaluate_model(ga_model, X_test_scaled, y_test)
+    # Print metrics for the presentation
+    print(f"GA Model -> Accuracy: {acc:.4f}, F1 Score: {f1:.4f}") 
     joblib.dump(ga_model, "ga_model.pkl")
     joblib.dump({"acc": acc, "f1": f1, "roc": roc}, "ga_metrics.pkl")
 
-    print("\n--- Training Completed Successfully ---\n")
+    # --- Global Model Training Completed Successfully ---
+    print("\n--- Global Model Training Completed Successfully ---\n")
+    
+    
+    # --- CALL FOR TEAM-SPECIFIC MODEL EXTENSION ---
+    # Using 'Arsenal' and 'Chelsea' as agreed upon for the extension argument
+    target_teams_to_test = ["Arsenal", "Chelsea"]
+    train_and_save_team_model(
+        df,  # Use the full loaded DataFrame
+        target_teams_to_test, 
+        "ARS_CHE" # Prefix for saving files
+    )
+    # ---------------------------------------------
+    
+    print("\n--- Full Pipeline Execution Finished ---\n")
 
 
 if __name__ == "__main__":

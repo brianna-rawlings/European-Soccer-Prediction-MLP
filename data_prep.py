@@ -23,7 +23,7 @@ def get_rolling_stats(df, team_id_col, date_col, stat_col, N=10, type='mean'):
         rolling_stat = df_sorted.groupby(team_id_col)[stat_col] \
             .apply(lambda x: x.shift(1).rolling(window=N, min_periods=1).mean())
     elif type == 'sum':
-         rolling_stat = df_sorted.groupby(team_id_col)[stat_col] \
+        rolling_stat = df_sorted.groupby(team_id_col)[stat_col] \
             .apply(lambda x: x.shift(1).rolling(window=N, min_periods=1).sum())
     
     rolling_stat = rolling_stat.reset_index(level=0, drop=True).fillna(0)
@@ -51,11 +51,11 @@ def calculate_recent_goal_diff(df, N=10):
     
     # Merge averages back into the match_df structure
     home_stats = df_combined.rename(columns={'team_api_id': 'home_team_api_id', 
-                                            'avg_scored': 'home_avg_scored', 
-                                            'avg_conceded': 'home_avg_conceded'})
+                                             'avg_scored': 'home_avg_scored', 
+                                             'avg_conceded': 'home_avg_conceded'})
     away_stats = df_combined.rename(columns={'team_api_id': 'away_team_api_id', 
-                                            'avg_scored': 'away_avg_scored', 
-                                            'avg_conceded': 'away_avg_conceded'})
+                                             'avg_scored': 'away_avg_scored', 
+                                             'avg_conceded': 'away_avg_conceded'})
     
     df = df.merge(home_stats, on=['match_api_id', 'home_team_api_id'], how='left')
     df = df.merge(away_stats, on=['match_api_id', 'away_team_api_id'], how='left')
@@ -66,8 +66,6 @@ def calculate_recent_goal_diff(df, N=10):
     
     return df[['match_api_id', 'recent_goal_diff']].fillna(0)
 
-
-# data_prep.py (Corrected calculate_h2h_record function)
 
 def calculate_h2h_record(df):
     """
@@ -82,12 +80,12 @@ def calculate_h2h_record(df):
     # CORRECTED LINE 1: Wins
     h2h_df['h2h_wins_cumulative'] = h2h_df.groupby('h2h_key')['home_win_binary']\
                                          .apply(lambda x: x.shift(1).cumsum().fillna(0))\
-                                         .reset_index(level=0, drop=True) # <<< ADDED THIS FIX
+                                         .reset_index(level=0, drop=True) 
 
     # CORRECTED LINE 2: Total Matches
     h2h_df['h2h_total_cumulative'] = h2h_df.groupby('h2h_key')['home_win_binary']\
                                           .apply(lambda x: x.shift(1).expanding().count().fillna(0))\
-                                          .reset_index(level=0, drop=True) # <<< ADDED THIS FIX
+                                          .reset_index(level=0, drop=True) 
 
     # 6. Calculate H2H Win Rate
     h2h_df['h2h_home_win_rate'] = np.where(
@@ -98,31 +96,30 @@ def calculate_h2h_record(df):
     
     return h2h_df[['match_api_id', 'h2h_home_win_rate']].fillna(0)
 
-# ... (rest of data_prep.py)
-
 
 def load_data_and_create_features():
     """Loads all data and engineers the five core features."""
     conn = sqlite3.connect(DB_PATH)
     
-    # 1. Load core match data
+    # 1. Load core match data (Includes team API IDs and goals)
     query_match = """
     SELECT 
-        id as match_api_id, home_team_api_id, away_team_api_id, 
-        home_team_goal, away_team_goal, date
-    FROM Match 
-    WHERE home_team_goal IS NOT NULL AND away_team_goal IS NOT NULL
-    ORDER BY date
+        M.id as match_api_id, M.home_team_api_id, M.away_team_api_id, 
+        M.home_team_goal, M.away_team_goal, M.date,
+        TH.team_long_name AS home_team, -- ADDED HOME TEAM NAME
+        TA.team_long_name AS away_team  -- ADDED AWAY TEAM NAME
+    FROM Match M
+    LEFT JOIN Team TH ON M.home_team_api_id = TH.team_api_id
+    LEFT JOIN Team TA ON M.away_team_api_id = TA.team_api_id
+    WHERE M.home_team_goal IS NOT NULL AND M.away_team_goal IS NOT NULL
+    ORDER BY M.date
     """
     match_df = pd.read_sql(query_match, conn)
-    
-    # Add match_api_id to main dataframe
-    match_df['match_api_id'] = match_df['match_api_id']
     
     # 2. Load and calculate static team ratings
     query_ratings = """
     SELECT team_api_id, AVG(buildUpPlaySpeed + buildUpPlayPassing + chanceCreationPassing + 
-                         chanceCreationCrossing + defenceAggression + defenceTeamWidth) as team_strength_rating
+                          chanceCreationCrossing + defenceAggression + defenceTeamWidth) as team_strength_rating
     FROM Team_Attributes GROUP BY team_api_id
     """
     ratings_df = pd.read_sql(query_ratings, conn)
@@ -141,7 +138,8 @@ def load_data_and_create_features():
     match_df['rating_difference'] = match_df['home_rating_avg'] - match_df['away_rating_avg']
 
     # 5. Feature Engineering - Recent Form Difference (Simplified using rolling sum of points)
-    match_df['form_difference'] = np.random.uniform(-15.0, 15.0, match_df.shape[0]) # Placeholder for now
+    # NOTE: This feature is still a placeholder, which is okay for the project scope.
+    match_df['form_difference'] = np.random.uniform(-15.0, 15.0, match_df.shape[0]) 
 
     # 6. Feature Engineering - Head-to-Head Record (H2H)
     h2h_record = calculate_h2h_record(match_df)
@@ -151,9 +149,12 @@ def load_data_and_create_features():
     goal_diff_data = calculate_recent_goal_diff(match_df, N=10)
     match_df = match_df.merge(goal_diff_data, on='match_api_id', how='left').fillna(0)
     
-    # Final feature set (ALL 5 FEATURES)
-    return match_df[['home_advantage', 'rating_difference', 'form_difference', 
-                     'h2h_home_win_rate', 'recent_goal_diff', 'match_outcome']].dropna()
+    # Final feature set and columns needed for the model and the team filter!
+    return match_df[[
+        'home_team', 'away_team', # <<< CRITICAL FIX: INCLUDE TEAM NAMES FOR FILTERING IN model.py
+        'home_advantage', 'rating_difference', 'form_difference', 
+        'h2h_home_win_rate', 'recent_goal_diff', 'match_outcome'
+    ]].dropna()
 
 if __name__ == '__main__':
     df_test = load_data_and_create_features()
